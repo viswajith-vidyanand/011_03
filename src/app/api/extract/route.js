@@ -5,8 +5,46 @@ export const maxDuration = 60;
 const MAX_BYTES = 4 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set(["pdf", "jpg", "jpeg", "png", "webp", "heic", "docx", "xlsx", "csv"]);
 
-function getMimeType(file, ext) {
-  if (file.type && file.type !== "application/octet-stream") return file.type;
+function detectMimeType(buffer, fileType, ext) {
+  if (buffer && buffer.length >= 4) {
+    // PDF: %PDF (0x25 0x50 0x44 0x46)
+    if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+      return "application/pdf";
+    }
+    // PNG: \x89PNG (0x89 0x50 0x4E 0x47)
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+      return "image/png";
+    }
+    // JPEG: \xFF\xD8\xFF
+    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      return "image/jpeg";
+    }
+    // WebP: RIFF....WEBP
+    if (
+      buffer.length >= 12 &&
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+    ) {
+      return "image/webp";
+    }
+    // HEIC / ISO base media file (ftyp at offset 4)
+    if (
+      buffer.length >= 12 &&
+      buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70
+    ) {
+      return "image/heic";
+    }
+    // ZIP container (DOCX / XLSX): PK\x03\x04
+    if (buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04) {
+      if (ext === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      if (ext === "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      return "application/zip";
+    }
+  }
+
+  if (ext === "csv") return "text/csv";
+  if (fileType && fileType !== "application/octet-stream") return fileType;
+
   const mimeMap = {
     pdf: "application/pdf",
     jpg: "image/jpeg",
@@ -45,7 +83,13 @@ export async function POST(request) {
     if (!file || typeof file.arrayBuffer !== "function") {
       return Response.json({ error: "Provide one file in the 'file' form field." }, { status: 400 });
     }
-    if (file.size > MAX_BYTES) {
+
+    const arrayBuffer = await file.arrayBuffer();
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      return Response.json({ error: "Uploaded file is empty (0 bytes)." }, { status: 400 });
+    }
+
+    if (arrayBuffer.byteLength > MAX_BYTES) {
       return Response.json({ error: "Files must be 4 MB or smaller." }, { status: 413 });
     }
 
@@ -54,10 +98,10 @@ export async function POST(request) {
       return Response.json({ error: "Unsupported file type. Use PDF, JPG, PNG, WebP, HEIC, DOCX, XLSX, or CSV." }, { status: 415 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const mimeType = getMimeType(file, ext);
+    const buffer = Buffer.from(arrayBuffer);
+    const mimeType = detectMimeType(buffer, file.type, ext);
 
-    // Pre-parse text for formats where text layer can be pre-extracted
+    // Pre-parse text for office or text formats
     let docxXlsxText = "";
     if (ext === "docx" || ext === "xlsx") {
       try {
@@ -76,12 +120,12 @@ export async function POST(request) {
       }
     }
 
-    let fallbackNotice = "";
+    let geminiError = null;
     let geminiResult = null;
 
-    // 1. Gemini extraction first if LLM_API_KEY is set
+    // 1. Gemini extraction first if LLM_API_KEY is configured
     const apiKey = String(process.env.LLM_API_KEY || "").trim();
-    if (apiKey) {
+    if (apiKey && apiKey !== "PASTE_YOUR_KEY_HERE") {
       try {
         const textPayload = docxXlsxText || (ext === "csv" ? csvRawText : "");
         geminiResult = await extractWithGemini({
@@ -91,25 +135,26 @@ export async function POST(request) {
           docType: documentType,
         });
       } catch (err) {
-        if (err.code !== "not_configured") {
-          fallbackNotice = err instanceof GeminiExtractionError
-            ? err.message
-            : `Gemini extraction was unavailable (${err.message}). Built-in fallback was used.`;
-        }
+        geminiError = err instanceof GeminiExtractionError ? err.message : (err.message || "Gemini extraction failed");
       }
     }
 
-    if (geminiResult && geminiResult.fields && Object.keys(geminiResult.fields).length > 0) {
+    if (geminiResult) {
+      const warnings = Object.keys(geminiResult.fields || {}).length === 0
+        ? ["Document was read by Gemini, but no matching fields were detected."]
+        : [];
       return Response.json({
         document: {
           type: documentType,
           name: file.name,
-          fields: geminiResult.fields,
+          fields: geminiResult.fields || {},
           fieldConfidence: geminiResult.fieldConfidence || {},
           lineItems: Array.isArray(geminiResult.lineItems) ? geminiResult.lineItems : [],
-          text: "",
+          text: geminiResult.rawOutput || "",
+          rawOutput: geminiResult.rawOutput || JSON.stringify(geminiResult.fields || {}, null, 2),
           method: "Gemini",
-          warnings: [],
+          geminiError: null,
+          warnings,
         },
       });
     }
@@ -156,13 +201,15 @@ export async function POST(request) {
     }
 
     if (!fallbackExtracted || (!Object.keys(fallbackExtracted.fields || {}).length && !fallbackExtracted.text)) {
-      const plainError = fallbackNotice
-        ? `${fallbackNotice} The file contains no selectable text and requires OCR.`
+      const plainError = geminiError
+        ? `AI unavailable: ${geminiError}. Built-in parser cannot read scanned images or PDFs without selectable text.`
         : "This file needs OCR or document parsing. The built-in parser could not read text from this image or scanned PDF.";
-      return Response.json({ error: plainError }, { status: 422 });
+      return Response.json({ error: plainError, geminiError }, { status: 422 });
     }
 
-    const warnings = fallbackNotice ? [fallbackNotice] : [];
+    const warningMsg = geminiError ? `AI unavailable: ${geminiError}, used built-in parser` : "";
+    const warnings = warningMsg ? [warningMsg] : [];
+
     return Response.json({
       document: {
         type: documentType,
@@ -171,8 +218,11 @@ export async function POST(request) {
         fieldConfidence: {},
         lineItems: fallbackExtracted.lineItems || [],
         text: fallbackExtracted.text || "",
-        method: fallbackMethod,
-        warning: fallbackNotice,
+        rawOutput: fallbackExtracted.text || JSON.stringify(fallbackExtracted.fields, null, 2),
+        method: "fallback",
+        fallbackEngine: fallbackMethod,
+        geminiError,
+        warning: warningMsg,
         warnings,
       },
     });

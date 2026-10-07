@@ -107,7 +107,9 @@ export default function Home() {
         status: "done",
         error: "",
         method: extractedDoc.method || "Built-in",
+        geminiError: extractedDoc.geminiError || null,
         warning: extractedDoc.warning || (extractedDoc.warnings && extractedDoc.warnings[0]) || "",
+        rawOutput: extractedDoc.rawOutput || extractedDoc.text || "",
       };
     } catch (error) {
       return {
@@ -263,17 +265,24 @@ export default function Home() {
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                         doc.method === "Gemini"
                           ? "bg-purple-100 text-purple-800 border border-purple-200"
+                          : doc.method === "fallback"
+                          ? "bg-amber-100 text-amber-800 border border-amber-200"
                           : doc.method === "OCR"
                           ? "bg-amber-100 text-amber-800 border border-amber-200"
                           : doc.method === "Text layer"
                           ? "bg-blue-100 text-blue-800 border border-blue-200"
                           : "bg-slate-100 text-slate-700 border border-slate-200"
                       }`}>
-                        {doc.method}
+                        {doc.method === "Gemini" ? "Read by Gemini" : doc.method === "fallback" ? "Built-in fallback" : doc.method}
                       </span>
                     )}
                   </div>
-                  {doc.warning && (
+                  {doc.geminiError && (
+                    <p className="mt-1 text-xs text-amber-800 bg-amber-50 rounded px-2 py-1 border border-amber-200">
+                      ℹ️ AI unavailable: {doc.geminiError}, used built-in parser
+                    </p>
+                  )}
+                  {doc.warning && !doc.geminiError && (
                     <p className="mt-1 text-xs text-amber-800 bg-amber-50 rounded px-2 py-1 border border-amber-200">
                       ℹ️ {doc.warning}
                     </p>
@@ -308,7 +317,7 @@ export default function Home() {
         <div className="mt-3"><Badge tone={result.status === "Ready" ? "green" : result.status === "Blocked" ? "red" : "amber"}>{result.status}</Badge></div>
         <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]"><div className="space-y-5"><section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">Shipment details from extracted documents</h2><div className="mt-4 grid gap-4 sm:grid-cols-2">{detailFields.map(([label, field]) => { const source = documents.find((doc) => doc.status === "done" && doc.fields?.[field]); return <div key={field}><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p><p className="mt-1 text-sm font-medium">{source ? source.fields[field] : "Not found in documents"}</p>{source && <p className="mt-0.5 text-[11px] text-slate-500">From {source.name}</p>}</div>; })}</div></section>
           <section className="rounded-xl border border-slate-200 bg-white"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><div><h2 className="font-semibold">Discrepancies</h2><p className="mt-1 text-xs text-slate-500">Edit extracted fields below; findings update from the comparison API.</p></div><label className="text-xs font-semibold text-slate-600">Filter <select value={state.filter} onChange={(event) => dispatch({ type: "FILTER", value: event.target.value })} className="ml-1 rounded border border-slate-300 bg-white px-2 py-1.5"><option value="all">All severities</option><option value="blocker">Critical</option><option value="warning">Warning</option></select></label></div>{visibleFindings.length ? <ul className="divide-y divide-slate-100">{visibleFindings.map((finding) => <li key={finding.id} className="p-5"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{finding.title}</p><p className="mt-1 text-sm text-slate-600">{finding.message}</p></div><Badge tone={finding.severity === "blocker" ? "red" : "amber"}>{finding.severity === "blocker" ? "Critical" : "Warning"}</Badge></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{finding.evidence.map((item, index) => <div key={`${finding.id}-${index}`} className="rounded-lg bg-slate-50 px-3 py-2"><p className="text-[11px] font-medium text-slate-500">{item.document}</p><p className="mt-0.5 text-sm font-semibold">{String(item.value)}</p></div>)}</div><div className="mt-3 rounded-lg border-l-2 border-amber-500 bg-amber-50 px-3 py-2 text-sm"><p><strong>Likely wrong:</strong> {finding.likelyWrongDocument || "Needs manual review"}</p><p className="mt-1 text-xs text-slate-700">{finding.likelyWrongReason}</p><p className="mt-2 text-xs"><strong>Suggested fix:</strong> {finding.suggestedFix}</p></div></li>)}</ul> : <div className="p-6 text-sm text-slate-600">No findings at this severity.</div>}</section>
-          <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">Extracted values · editable</h2><p className="mt-1 text-xs text-slate-500">Edit a field to refresh comparison findings and score.</p><div className="mt-4 space-y-4">{documents.filter((doc) => doc.status === "done").map((doc) => <div key={doc.id} className="rounded-lg border border-slate-200 p-3"><h3 className="text-sm font-semibold">{doc.name} {doc.method && <span className="ml-1.5 text-xs font-normal text-slate-500">({doc.method})</span>}</h3><div className="mt-3 grid gap-3 sm:grid-cols-2">{Object.entries(doc.fields || {}).filter(([, value]) => value !== "" && value !== null && value !== undefined).map(([field, value]) => <label key={field} className="text-xs font-medium text-slate-600">{field}<input defaultValue={String(value)} onBlur={(event) => { if (event.target.value !== String(value)) editField(doc.id, field, event.target.value); }} className="mt-1 block w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-700"/></label>)}</div></div>)}</div></section>
+          <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">Extracted values · editable</h2><p className="mt-1 text-xs text-slate-500">Edit a field to refresh comparison findings and score.</p><div className="mt-4 space-y-4">{documents.filter((doc) => doc.status === "done").map((doc) => <div key={doc.id} className="rounded-lg border border-slate-200 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold">{doc.name} {doc.method && <span className="ml-1.5 text-xs font-normal text-slate-500">({doc.method === "Gemini" ? "Read by Gemini" : doc.method})</span>}</h3></div><div className="mt-3 grid gap-3 sm:grid-cols-2">{Object.entries(doc.fields || {}).filter(([, value]) => value !== "" && value !== null && value !== undefined).map(([field, value]) => <label key={field} className="text-xs font-medium text-slate-600">{field}<input defaultValue={String(value)} onBlur={(event) => { if (event.target.value !== String(value)) editField(doc.id, field, event.target.value); }} className="mt-1 block w-full rounded-md border border-slate-300 px-2.5 py-2 text-sm text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-700"/></label>)}</div><details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5"><summary className="cursor-pointer text-xs font-semibold text-slate-700 hover:text-slate-900 select-none">Raw extracted text / JSON</summary><pre className="mt-2 max-h-60 overflow-auto rounded bg-slate-900 p-3 text-[11px] font-mono text-slate-100 whitespace-pre-wrap">{doc.rawOutput || doc.text || JSON.stringify(doc.fields, null, 2)}</pre></details></div>)}</div></section>
         </div><aside className="space-y-5"><section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">Readiness checklist</h2><ul className="mt-4 space-y-3">{result.checklist.map((item) => <li key={item.id} className="flex items-start gap-2 text-sm"><span className={item.passed ? "text-emerald-700" : "text-red-700"}>{item.passed ? "✓" : "×"}</span><span className="text-slate-700">{item.label}</span><Badge tone={item.passed ? "green" : "red"}>{item.passed ? "Pass" : "Fail"}</Badge></li>)}</ul></section>{result.missingDocuments?.length > 0 && <section className="rounded-xl border border-amber-200 bg-amber-50 p-5"><h2 className="font-semibold text-amber-900">Required documents missing</h2><ul className="mt-2 list-inside list-disc text-sm text-amber-900">{result.missingDocuments.map((name) => <li key={name}>{name}</li>)}</ul></section>}</aside></div>
       </section>}
     </div>
