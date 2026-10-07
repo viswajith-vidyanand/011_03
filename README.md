@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# ClearPort
 
-## Getting Started
+ClearPort compares extracted fields across export shipment documents.
 
-First, run the development server: hhhh
+## Run locally
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## API
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+### `POST /api/extract`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Send one file as `multipart/form-data` in `file` and its chosen type in `documentType`. The maximum file size is 4 MB. Accepted extensions: PDF, JPG/JPEG, PNG, WebP, HEIC, DOCX, XLSX, and CSV.
 
-## Learn More
+CSV and text-based PDFs are processed with built-in code. Scanned PDFs, images, DOCX, and XLSX need an OCR/document extraction provider. Configure `DOCUMENT_EXTRACTION_URL` and optionally `DOCUMENT_EXTRACTION_TOKEN`; the endpoint forwards the file and document type as multipart form data and expects JSON containing `fields`, optional `lineItems`, and optional `text`/`type`/`warnings` (or the same object nested under `document`).
 
-To learn more about Next.js, take a look at the following resources:
+Example extracted document:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```json
+{
+  "type": "Commercial Invoice",
+  "name": "invoice.pdf",
+  "fields": {
+    "quantity": 1200,
+    "cartons": 1200,
+    "netWeight": 12000,
+    "grossWeight": 12600,
+    "value": 48600,
+    "hsCode": "03061700",
+    "consignee": "Al Noor Trading LLC",
+    "poNumber": "PO-7841",
+    "loadingPort": "Cochin",
+    "dischargePort": "Jebel Ali",
+    "description": "Frozen shrimp",
+    "date": "2026-10-01",
+    "expiryDate": "2027-10-01"
+  },
+  "lineItems": [{ "quantity": 1200, "unitPrice": 40.5, "total": 48600 }]
+}
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### `POST /api/verify`
 
-## Deploy on Vercel
+Send JSON `{ "commodity": "seafood", "documents": [...] }` using the extracted document shape above. It returns findings with evidence, severity, likely outlier, reason, suggested fix, a score, checklist, and overall status.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The UI currently infers commodity from extracted goods descriptions. Supported checklist categories are seafood, spices, rubber, agri, and general.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Limits
+
+Uploaded files and results live in browser state for the current session. There is no database or durable file storage wired yet. Image OCR and Office document extraction require the provider environment variables above; without them those files return a readable extraction error. The sample shipment is intentionally synthetic and contains three discrepancies.
