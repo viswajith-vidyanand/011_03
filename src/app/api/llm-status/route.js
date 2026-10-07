@@ -1,8 +1,8 @@
 import { geminiConfig } from "@/lib/extract/gemini";
 
-export const dynamic = "force-dynamic";
-
-export async function GET() {
+export async function GET(request) {
+  // Accessing request.headers opts into dynamic execution on every request
+  const _ = request?.headers;
   const { configured, provider, model } = geminiConfig();
   return Response.json({ configured, provider, model });
 }

@@ -1,54 +1,26 @@
-import { inflateSync } from "node:zlib";
+import { extension, pdfText, csvText, officeText, extractFields } from "@/lib/extract/rules";
+import { extractWithGemini, GeminiExtractionError } from "@/lib/extract/gemini";
 
 export const maxDuration = 60;
 const MAX_BYTES = 4 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set(["pdf", "jpg", "jpeg", "png", "webp", "heic", "docx", "xlsx", "csv"]);
 
-function extension(name) { return String(name).split(".").pop().toLowerCase(); }
-function pdfText(buffer) {
-  const raw = buffer.toString("latin1");
-  const sections = [];
-  const streamPattern = /<<(.*?)>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  let match;
-  while ((match = streamPattern.exec(raw))) {
-    let stream = Buffer.from(match[2], "latin1");
-    if (/\/FlateDecode/.test(match[1])) { try { stream = inflateSync(stream); } catch { continue; } }
-    sections.push(stream.toString("latin1"));
-  }
-  const source = sections.join("\n") || raw;
-  const chunks = [];
-  const textPattern = /\(((?:\\.|[^\\)])*)\)\s*Tj|\[((?:.|\n)*?)\]\s*TJ/g;
-  while ((match = textPattern.exec(source))) {
-    const text = match[1] || match[2] || "";
-    const decoded = text.replace(/\\([nrtbf()\\])/g, (_all, char) => ({ n: "\n", r: "\r", t: "\t", b: "", f: "", "(": "(", ")": ")", "\\": "\\" }[char] || char));
-    chunks.push(decoded);
-  }
-  return chunks.join(" ").replace(/\s+/g, " ").trim();
-}
-function csvText(content) { return content.replace(/\r/g, "").split("\n").filter(Boolean).map((line) => line.split(",").map((value) => value.trim().replace(/^"|"$/g, "")).join(": ")).join("\n"); }
-function findValue(text, patterns) {
-  for (const pattern of patterns) { const match = text.match(pattern); if (match?.[1]) return match[1].trim().replace(/[;,\s]+$/, ""); }
-  return "";
-}
-function extractFields(text) {
-  const fields = {
-    quantity: findValue(text, [/(?:total\s+)?(?:quantity|qty)\s*[:#-]?\s*([\d,]+(?:\.\d+)?)/i]),
-    cartons: findValue(text, [/(?:total\s+)?(?:cartons?|packages?|cases?)\s*[:#-]?\s*([\d,]+(?:\.\d+)?)/i]),
-    netWeight: findValue(text, [/(?:net\s+weight|net\s+wt)\s*[:#-]?\s*([\d,.]+\s*(?:kg|kgs|lb|lbs)?)/i]),
-    grossWeight: findValue(text, [/(?:gross\s+weight|gross\s+wt)\s*[:#-]?\s*([\d,.]+\s*(?:kg|kgs|lb|lbs)?)/i]),
-    value: findValue(text, [/(?:grand\s+total|invoice\s+total|total\s+amount|total\s+value)\s*[:#-]?\s*((?:USD|EUR|INR|AED|\$|€|₹)?\s*[\d,.]+)/i]),
-    hsCode: findValue(text, [/(?:hs\s*code|h\.s\.\s*code|commodity\s+code)\s*[:#-]?\s*([\d.]{6,12})/i]),
-    consignee: findValue(text, [/(?:consignee|ship\s+to|buyer)\s*[:#-]?\s*([^\n]{2,100})/i]),
-    poNumber: findValue(text, [/(?:purchase\s+order|po)\s*(?:number|no\.?|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,30})/i]),
-    loadingPort: findValue(text, [/(?:port\s+of\s+loading|loading\s+port)\s*[:#-]?\s*([^\n]{2,80})/i]),
-    dischargePort: findValue(text, [/(?:port\s+of\s+discharge|discharge\s+port|destination\s+port)\s*[:#-]?\s*([^\n]{2,80})/i]),
-    description: findValue(text, [/(?:description\s+of\s+goods|goods\s+description|commodity)\s*[:#-]?\s*([^\n]{2,140})/i]),
-    date: findValue(text, [/(?:invoice\s+date|document\s+date|date)\s*[:#-]?\s*(\d{1,4}[/-]\d{1,2}[/-]\d{1,4})/i]),
-    expiryDate: findValue(text, [/(?:expiry|expiration|valid\s+until|valid\s+through)\s*(?:date)?\s*[:#-]?\s*(\d{1,4}[/-]\d{1,2}[/-]\d{1,4})/i]),
+function getMimeType(file, ext) {
+  if (file.type && file.type !== "application/octet-stream") return file.type;
+  const mimeMap = {
+    pdf: "application/pdf",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    heic: "image/heic",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    csv: "text/csv",
   };
-  Object.keys(fields).forEach((field) => { if (!fields[field]) delete fields[field]; });
-  return fields;
+  return mimeMap[ext] || "application/octet-stream";
 }
+
 async function configuredExtraction(file, documentType) {
   const providerUrl = process.env.DOCUMENT_EXTRACTION_URL;
   if (!providerUrl) return null;
@@ -69,24 +41,147 @@ export async function POST(request) {
     const form = await request.formData();
     const file = form.get("file");
     const documentType = String(form.get("documentType") || "Other");
-    if (!file || typeof file.arrayBuffer !== "function") return Response.json({ error: "Provide one file in the 'file' form field." }, { status: 400 });
-    if (file.size > MAX_BYTES) return Response.json({ error: "Files must be 4 MB or smaller." }, { status: 413 });
+
+    if (!file || typeof file.arrayBuffer !== "function") {
+      return Response.json({ error: "Provide one file in the 'file' form field." }, { status: 400 });
+    }
+    if (file.size > MAX_BYTES) {
+      return Response.json({ error: "Files must be 4 MB or smaller." }, { status: 413 });
+    }
+
     const ext = extension(file.name);
-    if (!ALLOWED_EXTENSIONS.has(ext)) return Response.json({ error: "Unsupported file type. Use PDF, JPG, PNG, WebP, HEIC, DOCX, XLSX, or CSV." }, { status: 415 });
-    let extracted = await configuredExtraction(file, documentType);
-    if (!extracted && ext === "csv") {
-      const text = csvText(await file.text());
-      extracted = { fields: extractFields(text), text };
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      return Response.json({ error: "Unsupported file type. Use PDF, JPG, PNG, WebP, HEIC, DOCX, XLSX, or CSV." }, { status: 415 });
     }
-    if (!extracted && ext === "pdf") {
-      const text = pdfText(Buffer.from(await file.arrayBuffer()));
-      if (text.length > 30) extracted = { fields: extractFields(text), text };
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const mimeType = getMimeType(file, ext);
+
+    // Pre-parse text for formats where text layer can be pre-extracted
+    let docxXlsxText = "";
+    if (ext === "docx" || ext === "xlsx") {
+      try {
+        docxXlsxText = officeText(buffer, ext);
+      } catch {
+        docxXlsxText = "";
+      }
     }
-    if (!extracted) return Response.json({ error: "This file needs OCR or document parsing. Configure DOCUMENT_EXTRACTION_URL to enable extraction for scanned PDFs, images, DOCX, and XLSX files." }, { status: 422 });
-    const fields = extracted.fields || extractFields(extracted.text || "");
-    return Response.json({ document: { type: extracted.type || documentType, name: file.name, fields, lineItems: Array.isArray(extracted.lineItems) ? extracted.lineItems : [], text: extracted.text || "", warnings: extracted.warnings || [] } });
+
+    let csvRawText = "";
+    if (ext === "csv") {
+      try {
+        csvRawText = buffer.toString("utf8");
+      } catch {
+        csvRawText = "";
+      }
+    }
+
+    let fallbackNotice = "";
+    let geminiResult = null;
+
+    // 1. Gemini extraction first if LLM_API_KEY is set
+    const apiKey = String(process.env.LLM_API_KEY || "").trim();
+    if (apiKey) {
+      try {
+        const textPayload = docxXlsxText || (ext === "csv" ? csvRawText : "");
+        geminiResult = await extractWithGemini({
+          buffer,
+          mimeType,
+          text: textPayload,
+          docType: documentType,
+        });
+      } catch (err) {
+        if (err.code !== "not_configured") {
+          fallbackNotice = err instanceof GeminiExtractionError
+            ? err.message
+            : `Gemini extraction was unavailable (${err.message}). Built-in fallback was used.`;
+        }
+      }
+    }
+
+    if (geminiResult && geminiResult.fields && Object.keys(geminiResult.fields).length > 0) {
+      return Response.json({
+        document: {
+          type: documentType,
+          name: file.name,
+          fields: geminiResult.fields,
+          fieldConfidence: geminiResult.fieldConfidence || {},
+          lineItems: Array.isArray(geminiResult.lineItems) ? geminiResult.lineItems : [],
+          text: "",
+          method: "Gemini",
+          warnings: [],
+        },
+      });
+    }
+
+    // 2. Automatic fallback to existing ingest + OCR + rules.js path
+    let fallbackExtracted = null;
+    let fallbackMethod = "Rules";
+
+    // Try external OCR service if configured
+    try {
+      const ocrResult = await configuredExtraction(file, documentType);
+      if (ocrResult) {
+        fallbackExtracted = {
+          fields: ocrResult.fields || extractFields(ocrResult.text || ""),
+          lineItems: Array.isArray(ocrResult.lineItems) ? ocrResult.lineItems : [],
+          text: ocrResult.text || "",
+        };
+        fallbackMethod = "OCR";
+      }
+    } catch {
+      // Ignore OCR service failure and proceed to built-in rules/parsers
+    }
+
+    if (!fallbackExtracted) {
+      if (ext === "csv") {
+        const formatted = csvText(csvRawText);
+        const fields = extractFields(formatted);
+        fallbackExtracted = { fields, text: formatted, lineItems: [] };
+        fallbackMethod = "Rules";
+      } else if (ext === "pdf") {
+        const text = pdfText(buffer);
+        if (text && text.length > 20) {
+          const fields = extractFields(text);
+          fallbackExtracted = { fields, text, lineItems: [] };
+          fallbackMethod = "Text layer";
+        }
+      } else if (ext === "docx" || ext === "xlsx") {
+        if (docxXlsxText && docxXlsxText.length > 10) {
+          const fields = extractFields(docxXlsxText);
+          fallbackExtracted = { fields, text: docxXlsxText, lineItems: [] };
+          fallbackMethod = "Text layer";
+        }
+      }
+    }
+
+    if (!fallbackExtracted || (!Object.keys(fallbackExtracted.fields || {}).length && !fallbackExtracted.text)) {
+      const plainError = fallbackNotice
+        ? `${fallbackNotice} The file contains no selectable text and requires OCR.`
+        : "This file needs OCR or document parsing. The built-in parser could not read text from this image or scanned PDF.";
+      return Response.json({ error: plainError }, { status: 422 });
+    }
+
+    const warnings = fallbackNotice ? [fallbackNotice] : [];
+    return Response.json({
+      document: {
+        type: documentType,
+        name: file.name,
+        fields: fallbackExtracted.fields || {},
+        fieldConfidence: {},
+        lineItems: fallbackExtracted.lineItems || [],
+        text: fallbackExtracted.text || "",
+        method: fallbackMethod,
+        warning: fallbackNotice,
+        warnings,
+      },
+    });
   } catch (error) {
-    const timedOut = error.name === "TimeoutError" || error.name === "AbortError";
-    return Response.json({ error: timedOut ? "Document extraction timed out. Retry the file." : error.message || "Unable to extract this document." }, { status: timedOut ? 504 : 500 });
+    const isTimeout = error.name === "TimeoutError" || error.name === "AbortError";
+    const status = isTimeout ? 504 : 422;
+    return Response.json(
+      { error: isTimeout ? "Document extraction timed out. Retry the file." : error.message || "Unable to extract this document." },
+      { status }
+    );
   }
 }

@@ -5,6 +5,7 @@ export const EXTRACTION_FIELDS = {
   date: "document date",
   consignee: "buyer or consignee",
   quantity: "quantity",
+  cartons: "cartons or packages",
   netWeight: "net weight",
   grossWeight: "gross weight",
   unitPrice: "unit price",
@@ -15,6 +16,7 @@ export const EXTRACTION_FIELDS = {
   loadingPort: "port of loading",
   dischargePort: "port of discharge",
   description: "goods description",
+  expiryDate: "expiry date",
 };
 
 export function extension(name) { return String(name || "").split(".").pop().toLowerCase(); }
@@ -80,6 +82,7 @@ export function extractFields(text) {
   const fields = {
     documentNumber: findValue(text, [/(?:invoice|document|shipping bill|certificate)\s*(?:number|no\.?|#)\s*[:#-]?\s*([A-Z0-9][A-Z0-9/-]{2,30})/i]),
     quantity: findValue(text, [/(?:total\s+)?(?:quantity|qty)\s*[:#-]?\s*([\d,]+(?:\.\d+)?)/i]),
+    cartons: findValue(text, [/(?:total\s+)?(?:cartons?|packages?|cases?)\s*[:#-]?\s*([\d,]+(?:\.\d+)?)/i]),
     netWeight: findValue(text, [/(?:net\s+weight|net\s+wt)\s*[:#-]?\s*([\d,.]+\s*(?:kg|kgs|lb|lbs)?)/i]),
     grossWeight: findValue(text, [/(?:gross\s+weight|gross\s+wt)\s*[:#-]?\s*([\d,.]+\s*(?:kg|kgs|lb|lbs)?)/i]),
     unitPrice: findValue(text, [/(?:unit\s+price|price\s+per\s+unit)\s*[:#-]?\s*((?:USD|EUR|INR|AED|\$)?\s*[\d,.]+)/i]),
@@ -92,6 +95,7 @@ export function extractFields(text) {
     dischargePort: findValue(text, [/(?:port\s+of\s+discharge|discharge\s+port|destination\s+port)\s*[:#-]?\s*([^\n]{2,80})/i]),
     description: findValue(text, [/(?:description\s+of\s+goods|goods\s+description|commodity)\s*[:#-]?\s*([^\n]{2,140})/i]),
     date: findValue(text, [/(?:invoice\s+date|document\s+date|date)\s*[:#-]?\s*(\d{1,4}[/-]\d{1,2}[/-]\d{1,4})/i]),
+    expiryDate: findValue(text, [/(?:expiry|expiration|valid\s+until|valid\s+through)\s*(?:date)?\s*[:#-]?\s*(\d{1,4}[/-]\d{1,2}[/-]\d{1,4})/i]),
   };
   Object.keys(fields).forEach((field) => { if (!fields[field]) delete fields[field]; });
   return fields;
