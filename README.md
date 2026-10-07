@@ -1,6 +1,6 @@
-# ClearPort
+# Inovix
 
-ClearPort compares extracted fields across export shipment documents.
+Inovix compares extracted fields across export shipment documents.
 
 ## Run locally
 

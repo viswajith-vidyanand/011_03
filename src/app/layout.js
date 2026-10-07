@@ -4,7 +4,7 @@ import "./globals.css";
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 
 export const metadata = {
-  title: "ClearPort | Export document verification",
+  title: "Inovix | Export document verification",
   description: "Cross-check export shipment documents before cargo leaves.",
 };
 

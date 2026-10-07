@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#06142e">
+<title>Inovix</title>
+<style>
+  :root{
+    --ink:#06142e;
+    --ink-2:#0b2250;
+    --cobalt:#2e5bff;
+    --sky:#9db8ff;
+    --sea:#3df5c0;
+    --flag:#ff5a36;
+    --paper:#eaf0ff;
+    --paper-line:#c3cff0;
+    --paper-text:#1b2a55;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:var(--ink);overflow:hidden;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:#fff}
+
+  /* ---------- Stage ---------- */
+  .stage{
+    position:fixed;inset:0;
+    background:
+      radial-gradient(120% 80% at 50% 0%, var(--ink-2) 0%, var(--ink) 60%),
+      var(--ink);
+    animation:leave .6s ease 4.4s forwards;
+    overflow:hidden;
+  }
+  .world{position:absolute;inset:0;animation:shake .3s linear 2.8s both}
+
+  /* soft light behind the stamp */
+  .glow{
+    position:absolute;left:50%;top:48%;width:min(90vw,760px);aspect-ratio:1;
+    transform:translate(-50%,-50%);
+    background:radial-gradient(circle, rgba(46,91,255,.55) 0%, rgba(46,91,255,.12) 45%, transparent 70%);
+    animation:breathe 2.4s ease-in-out infinite;
+  }
+
+  /* sea-lane grid rolling toward the viewer */
+  .sea{
+    position:absolute;left:-50%;width:200%;bottom:0;height:55%;
+    background:
+      linear-gradient(to top, rgba(46,91,255,.35), transparent 70%),
+      repeating-linear-gradient(90deg, rgba(157,184,255,.35) 0 1px, transparent 1px 64px),
+      repeating-linear-gradient(0deg,  rgba(157,184,255,.35) 0 1px, transparent 1px 64px);
+    transform:perspective(420px) rotateX(64deg);
+    transform-origin:50% 100%;
+    -webkit-mask-image:linear-gradient(to top,#000 25%,transparent 95%);
+            mask-image:linear-gradient(to top,#000 25%,transparent 95%);
+    animation:roll 2.2s linear infinite;
+  }
+
+  /* ---------- Documents ---------- */
+  .sheet{
+    position:absolute;left:50%;top:44%;
+    width:clamp(112px,26vw,230px);aspect-ratio:3/4;
+    padding:clamp(8px,1.6vw,16px);
+    background:var(--paper);color:var(--paper-text);
+    border-radius:6px;overflow:hidden;
+    box-shadow:0 24px 60px rgba(0,0,0,.5);
+    opacity:0;
+  }
+  .sheet.a{animation:inA .9s cubic-bezier(.2,.8,.2,1) .4s both, outA .55s ease-in 2.3s forwards}
+  .sheet.b{animation:inB .9s cubic-bezier(.2,.8,.2,1) .55s both, outB .55s ease-in 2.3s forwards}
+
+  .doc-title{font-size:clamp(9px,1.7vw,14px);font-weight:700;margin-bottom:clamp(6px,1.2vw,12px)}
+  .bar{display:block;height:clamp(4px,.7vw,7px);border-radius:4px;background:var(--paper-line);margin-bottom:clamp(5px,1vw,10px)}
+  .w60{width:60%}.w70{width:70%}.w80{width:80%}.w85{width:85%}.w90{width:90%}
+
+  .qty{
+    position:relative;display:flex;justify-content:space-between;align-items:baseline;
+    font-size:clamp(9px,1.8vw,15px);margin:clamp(8px,1.6vw,16px) 0;
+    padding-bottom:3px;
+  }
+  .qty b{font-weight:800;animation:flagged .4s ease 1.9s both}
+  .qty::after{
+    content:"";position:absolute;left:0;right:0;bottom:0;height:3px;border-radius:2px;
+    background:var(--flag);transform:scaleX(0);transform-origin:left;
+    animation:underline .45s ease 1.9s forwards;
+  }
+
+  /* scan beam crossing each sheet */
+  .sheet::after{
+    content:"";position:absolute;left:0;right:0;top:0;height:28%;
+    background:linear-gradient(to bottom, transparent, rgba(61,245,192,.55) 85%, var(--sea) 100%);
+    transform:translateY(-110%);
+    animation:beam .8s ease-in-out 1.5s both;
+  }
+
+  /* ---------- Stamp (the one memorable moment) ---------- */
+  .center{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);text-align:center;width:100%}
+  .stamp{
+    position:relative;display:inline-block;
+    padding:.12em .32em .18em;
+    border:4px solid rgba(157,184,255,.95);border-radius:12px;
+    box-shadow:0 0 0 6px rgba(46,91,255,.35), 0 0 70px rgba(46,91,255,.6), inset 0 0 40px rgba(46,91,255,.25);
+    font-size:clamp(46px,13vw,132px);
+    opacity:0;
+    animation:slam .55s cubic-bezier(.2,.9,.2,1.15) 2.6s both;
+  }
+  .stamp h1{
+    font-family:"Arial Black","Helvetica Neue",Arial,sans-serif;
+    font-weight:900;font-size:1em;line-height:1;letter-spacing:.05em;
+    padding-left:.05em;
+    background:linear-gradient(100deg,#fff 0%,#9db8ff 30%,#3df5c0 60%,#fff 100%);
+    background-size:220% 100%;
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    filter:drop-shadow(0 0 18px rgba(46,91,255,.8));
+    animation:shine 1.3s ease 3.1s both;
+  }
+  .check{
+    position:absolute;right:-.28em;top:-.3em;width:.42em;height:.42em;
+    filter:drop-shadow(0 0 12px rgba(61,245,192,.8));
+  }
+  .check circle{fill:var(--ink);stroke:var(--sea);stroke-width:3}
+  .check path{fill:none;stroke:var(--sea);stroke-width:5;stroke-linecap:round;stroke-linejoin:round;
+    stroke-dasharray:40;stroke-dashoffset:40;animation:draw .45s ease 3.25s forwards}
+
+  .ring{
+    position:absolute;left:50%;top:46%;width:30vmin;aspect-ratio:1;border-radius:50%;
+    border:2px solid var(--sea);transform:translate(-50%,-50%) scale(.2);opacity:0;
+    animation:ring .95s ease-out 2.75s both;
+  }
+
+  .tag{
+    display:inline-block;margin-top:clamp(18px,3.2vw,30px);
+    font-size:clamp(14px,2.3vw,21px);color:#c3d2ff;letter-spacing:.01em;
+    clip-path:inset(0 100% 0 0);
+    animation:wipe 1s steps(30) 3.1s forwards;
+  }
+
+  /* ---------- Progress ---------- */
+  .progress{position:absolute;left:50%;bottom:clamp(28px,6vh,56px);transform:translateX(-50%);width:min(420px,72vw)}
+  .status{display:grid;margin-bottom:10px;height:1.3em;font-size:clamp(12px,1.9vw,14px);color:var(--sky);text-align:center}
+  .status span{grid-area:1/1;opacity:0}
+  .status .s1{animation:s1 4.5s linear both}
+  .status .s2{animation:s2 4.5s linear both}
+  .status .s3{animation:s3 4.5s linear both}
+  .meter{height:3px;border-radius:2px;background:rgba(255,255,255,.14);overflow:hidden}
+  .meter i{display:block;height:100%;transform-origin:left;
+    background:linear-gradient(90deg,var(--cobalt),var(--sea));
+    animation:fill 4.5s cubic-bezier(.3,.1,.2,1) both}
+
+  .skip{
+    position:fixed;right:clamp(16px,3vw,28px);bottom:clamp(18px,3.4vh,30px);
+    color:var(--sky);font-size:14px;text-decoration:none;padding:6px 2px;
+    border-bottom:1px solid rgba(157,184,255,.45);
+  }
+  .skip:hover{color:#fff;border-color:#fff}
+  .skip:focus-visible{outline:2px solid var(--sea);outline-offset:4px}
+
+  /* ---------- Keyframes ---------- */
+  @keyframes inA{
+    from{opacity:0;transform:translate(-50%,-50%) translateX(-70vw) rotate(-20deg)}
+    to  {opacity:1;transform:translate(-50%,-50%) translateX(-58%) rotate(-5deg)}
+  }
+  @keyframes inB{
+    from{opacity:0;transform:translate(-50%,-50%) translateX(70vw) rotate(20deg)}
+    to  {opacity:1;transform:translate(-50%,-50%) translateX(58%) rotate(5deg)}
+  }
+  @keyframes outA{
+    from{opacity:1;transform:translate(-50%,-50%) translateX(-58%) rotate(-5deg)}
+    to  {opacity:0;transform:translate(-50%,-50%) translateX(0) rotate(0) scale(.15);filter:blur(4px)}
+  }
+  @keyframes outB{
+    from{opacity:1;transform:translate(-50%,-50%) translateX(58%) rotate(5deg)}
+    to  {opacity:0;transform:translate(-50%,-50%) translateX(0) rotate(0) scale(.15);filter:blur(4px)}
+  }
+  @keyframes beam{from{transform:translateY(-110%)}to{transform:translateY(420%)}}
+  @keyframes underline{to{transform:scaleX(1)}}
+  @keyframes flagged{to{color:var(--flag)}}
+  @keyframes slam{
+    from{opacity:0;transform:scale(2.7) rotate(-12deg);filter:blur(12px)}
+    60% {opacity:1;transform:scale(.93) rotate(-3deg);filter:blur(0)}
+    to  {opacity:1;transform:scale(1) rotate(-4deg);filter:blur(0)}
+  }
+  @keyframes ring{
+    from{opacity:.9;transform:translate(-50%,-50%) scale(.2)}
+    to  {opacity:0;transform:translate(-50%,-50%) scale(6)}
+  }
+  @keyframes shake{
+    0%,100%{transform:none}
+    20%{transform:translate(-7px,3px)}
+    40%{transform:translate(6px,-4px)}
+    60%{transform:translate(-4px,2px)}
+    80%{transform:translate(2px,-1px)}
+  }
+  @keyframes shine{from{background-position:120% 0}to{background-position:-20% 0}}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  @keyframes wipe{to{clip-path:inset(0 0 0 0)}}
+  @keyframes fill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  @keyframes roll{from{background-position:0 0,0 0,0 0}to{background-position:0 0,0 0,0 64px}}
+  @keyframes breathe{0%,100%{opacity:.75}50%{opacity:1}}
+  @keyframes leave{to{opacity:0;transform:scale(1.04);filter:blur(6px)}}
+  @keyframes s1{0%,2%{opacity:0;transform:translateY(6px)}6%,28%{opacity:1;transform:none}32%,100%{opacity:0}}
+  @keyframes s2{0%,32%{opacity:0;transform:translateY(6px)}38%,60%{opacity:1;transform:none}66%,100%{opacity:0}}
+  @keyframes s3{0%,66%{opacity:0;transform:translateY(6px)}72%,98%{opacity:1;transform:none}100%{opacity:0}}
+
+  /* ---------- Reduced motion: static, quick ---------- */
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation:none !important}
+    .sheet,.ring{display:none}
+    .stamp{opacity:1;transform:rotate(-4deg)}
+    .tag{clip-path:none}
+    .check path{stroke-dashoffset:0}
+    .status .s3{opacity:1}
+    .meter i{transform:scaleX(1)}
+  }
+</style>
+</head>
+<body>
+  <main class="stage">
+    <div class="world">
+      <div class="glow" aria-hidden="true"></div>
+      <div class="sea" aria-hidden="true"></div>
+
+      <div class="sheet a" aria-hidden="true">
+        <p class="doc-title">Commercial Invoice</p>
+        <i class="bar w90"></i><i class="bar w70"></i><i class="bar w80"></i>
+        <div class="qty"><span>Cartons</span><b>1,200</b></div>
+        <i class="bar w60"></i><i class="bar w85"></i>
+      </div>
+      <div class="sheet b" aria-hidden="true">
+        <p class="doc-title">Packing List</p>
+        <i class="bar w80"></i><i class="bar w90"></i><i class="bar w70"></i>
+        <div class="qty"><span>Cartons</span><b>1,180</b></div>
+        <i class="bar w85"></i><i class="bar w60"></i>
+      </div>
+
+      <div class="ring" aria-hidden="true"></div>
+
+      <div class="center">
+        <div class="stamp">
+          <h1>INOVIX</h1>
+          <svg class="check" viewBox="0 0 40 40" aria-hidden="true">
+            <circle cx="20" cy="20" r="17"/>
+            <path d="M11 21 l6 6 l12 -14"/>
+          </svg>
+        </div>
+        <br>
+        <p class="tag">Catch document errors before the cargo ships.</p>
+      </div>
+
+      <div class="progress" aria-hidden="true">
+        <div class="status">
+          <span class="s1">Reading documents</span>
+          <span class="s2">Cross-checking fields</span>
+          <span class="s3">Flagging discrepancies</span>
+        </div>
+        <div class="meter"><i></i></div>
+      </div>
+    </div>
+  </main>
+
+  <a class="skip" id="skip" href="/">Skip intro</a>
+
+  <script>
+    // Mark the intro as seen for this browser session, then enter the app.
+    // The Next.js redirect rule sends "/" back here only when this cookie is missing.
+    var seen = function () { document.cookie = "inovix_intro=1; path=/; SameSite=Lax"; };
+    var enter = function () { seen(); location.replace("/"); };
+    var reduced = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    seen();
+    var timer = setTimeout(enter, reduced ? 1500 : 5000);
+    document.getElementById("skip").addEventListener("click", function (e) {
+      e.preventDefault(); clearTimeout(timer); enter();
+    });
+  </script>
+</body>
+</html>
