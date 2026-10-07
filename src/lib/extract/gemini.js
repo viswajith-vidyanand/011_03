@@ -22,7 +22,6 @@ export class GeminiExtractionError extends Error {
 export function geminiConfig() {
   const key = String(process.env.LLM_API_KEY || "").trim();
   let model = String(process.env.GEMINI_MODEL || DEFAULT_MODEL).trim();
-  // Map deprecated 2.5 / 2.0 models that return 404 to active 3.5 Flash-Lite
   if (!model || model === "gemini-2.5-flash" || model === "gemini-2.0-flash" || model === "gemini-1.5-flash") {
     model = DEFAULT_MODEL;
   }
@@ -33,77 +32,29 @@ export function geminiConfig() {
   };
 }
 
-function fieldSchema() {
-  return {
-    type: "OBJECT",
-    properties: {
-      value: {
-        type: "STRING",
-        nullable: true,
-        description: "The extracted value as a string, or null if missing or not visibly present",
-      },
-      page: {
-        type: "INTEGER",
-        nullable: true,
-        description: "1-based page number where the field was found, or null if not found",
-      },
-      confidence: {
-        type: "NUMBER",
-        description: "Confidence score between 0.0 and 1.0 (1.0 = clearly visible and unambiguous, 0.0 = missing)",
-      },
-      uncertain: {
-        type: "BOOLEAN",
-        description: "True if missing, ambiguous, or estimated; false if clearly and explicitly stated",
-      },
-    },
-    required: ["value", "page", "confidence", "uncertain"],
-  };
-}
-
-function schemaFor(docType) {
-  const requested = DOCUMENT_FIELDS[docType] || Object.keys(EXTRACTION_FIELDS);
-  return {
-    type: "OBJECT",
-    properties: {
-      fields: {
-        type: "OBJECT",
-        properties: Object.fromEntries(requested.map((field) => [field, fieldSchema()])),
-        required: requested,
-      },
-      lineItems: {
-        type: "ARRAY",
-        items: {
-          type: "OBJECT",
-          properties: {
-            description: { type: "STRING" },
-            quantity: { type: "NUMBER" },
-            unitPrice: { type: "NUMBER" },
-            total: { type: "NUMBER" },
-          },
-        },
-      },
-    },
-    required: ["fields"],
-  };
-}
-
 function extractionPrompt(docType) {
   const fields = DOCUMENT_FIELDS[docType] || Object.keys(EXTRACTION_FIELDS);
-  const fieldList = fields.map((key) => `${key} (${EXTRACTION_FIELDS[key] || key})`).join(", ");
-  return `You are an expert shipping and customs document parser. You are reading an exporter's shipping document.
-Document type: ${docType}.
-Target fields to extract: ${fieldList}.
+  const fieldList = fields.map((key) => `"${key}"`).join(", ");
+  return `You are an expert shipping and customs document parser reading an exporter's ${docType}.
 
-STRICT EXTRACTION RULES:
-1. Extract ONLY information that is visibly present in the document.
-2. NEVER invent, extrapolate, or guess values. If a field is missing, not mentioned, or illegible, set "value" to null.
-3. For every requested field, return an object with:
-   - "value": string representation of the exact value found, or null if missing.
-   - "page": integer 1-based page number where the field was found, or null if missing.
-   - "confidence": number between 0.0 and 1.0 (1.0 for clearly stated and verified values, 0.0 for missing).
-   - "uncertain": boolean (true if missing, ambiguous, or estimated; false if clearly and explicitly stated).
-4. If this document contains an itemized table or packing lines, also extract lineItems with description, quantity, unitPrice, and total.
-5. Output strictly valid JSON conforming to the schema.`;
+Extract these fields: ${fieldList}.
+
+Return a JSON object with this exact shape:
+{
+  "fields": {
+    "<fieldName>": { "value": "<string or null>", "page": <int or null>, "confidence": <0.0-1.0>, "uncertain": <bool> },
+    ...
+  },
+  "lineItems": [ { "description": "...", "quantity": 0, "unitPrice": 0, "total": 0 } ]
+}
+
+Rules:
+- "value": the exact text from the document, or null if the field is not present.
+- "page": 1-based page number where found, or null.
+- "confidence": 1.0 if clearly stated, lower if ambiguous, 0.0 if missing.
+- "uncertain": true if missing/ambiguous/estimated, false if clearly stated.
+- NEVER invent values. If a field is not in the document, set value to null.
+- Include lineItems only if the document has an itemised table; otherwise use an empty array.`;
 }
 
 function responseText(payload) {
@@ -111,21 +62,42 @@ function responseText(payload) {
 }
 
 export function validateGeminiOutput(payload, docType) {
-  if (!payload || typeof payload !== "object" || !payload.fields || typeof payload.fields !== "object") {
+  if (!payload || typeof payload !== "object") {
     throw new GeminiExtractionError("Gemini returned an invalid JSON structure.", "invalid_json");
   }
+
+  // Handle both { fields: {...} } and flat { fieldName: value } shapes
+  const rawFields = payload.fields && typeof payload.fields === "object" ? payload.fields : payload;
 
   const requested = DOCUMENT_FIELDS[docType] || Object.keys(EXTRACTION_FIELDS);
   const fields = {};
   const fieldConfidence = {};
 
   for (const field of requested) {
-    const item = payload.fields[field];
-    if (!item || typeof item !== "object") {
+    const item = rawFields[field];
+
+    // Not present at all
+    if (item === undefined || item === null) {
       fieldConfidence[field] = { value: null, page: null, confidence: 0, uncertain: true };
       continue;
     }
 
+    // If it's a simple string/number (flat shape from model), wrap it
+    if (typeof item !== "object") {
+      const strVal = String(item).trim();
+      const hasValue = strVal !== "" && strVal.toLowerCase() !== "null";
+      fields[field] = hasValue ? strVal : undefined;
+      fieldConfidence[field] = {
+        value: hasValue ? strVal : null,
+        page: null,
+        confidence: hasValue ? 0.8 : 0,
+        uncertain: !hasValue,
+      };
+      if (hasValue) fields[field] = strVal;
+      continue;
+    }
+
+    // Structured shape { value, page, confidence, uncertain }
     const raw = item.value;
     const hasValue = raw !== null && raw !== undefined && String(raw).trim() !== "" && String(raw).trim().toLowerCase() !== "null";
     const strVal = hasValue ? String(raw).trim() : null;
@@ -133,13 +105,7 @@ export function validateGeminiOutput(payload, docType) {
     const uncertain = typeof item.uncertain === "boolean" ? item.uncertain : (!hasValue || conf < 0.7);
     const pageNum = Number.isInteger(item.page) ? item.page : null;
 
-    fieldConfidence[field] = {
-      value: strVal,
-      page: pageNum,
-      confidence: conf,
-      uncertain,
-    };
-
+    fieldConfidence[field] = { value: strVal, page: pageNum, confidence: conf, uncertain };
     if (strVal !== null) {
       fields[field] = strVal;
     }
@@ -158,39 +124,21 @@ async function readableError(response) {
     // ignore
   }
 
-  const isInvalidKey =
-    response.status === 401 ||
-    response.status === 403 ||
-    /api key/i.test(details) ||
-    /unauthorized/i.test(details) ||
-    /permission/i.test(details);
-
-  if (isInvalidKey) {
+  if (response.status === 401 || response.status === 403 || /api key/i.test(details) || /unauthorized/i.test(details) || /permission/i.test(details)) {
     return new GeminiExtractionError("Invalid or unauthorized API key.", "invalid_key");
   }
-
-  const isQuota =
-    response.status === 429 ||
-    /quota/i.test(details) ||
-    /resource_exhausted/i.test(details) ||
-    /rate limit/i.test(details);
-
-  if (isQuota) {
+  if (response.status === 429 || /quota/i.test(details) || /resource_exhausted/i.test(details) || /rate limit/i.test(details)) {
     return new GeminiExtractionError("Gemini quota or rate limit exceeded.", "rate_limited");
   }
-
   if (response.status === 404 || /not found/i.test(details)) {
     return new GeminiExtractionError("Configured Gemini model not found or deprecated.", "model_not_found");
   }
-
   if (response.status === 503 || /high demand/i.test(details) || /unavailable/i.test(details)) {
     return new GeminiExtractionError("Gemini service is temporarily overloaded.", "service_unavailable");
   }
-
   if (response.status >= 500) {
     return new GeminiExtractionError("Gemini service error.", "service_unavailable");
   }
-
   return new GeminiExtractionError(
     details ? `Gemini extraction failed: ${details}` : `Gemini request failed (HTTP ${response.status})`,
     "gemini_unavailable"
@@ -217,7 +165,6 @@ export async function extractWithGemini({ buffer, mimeType, text, docType }) {
       },
     });
   } else if (text) {
-    // CSV, DOCX/XLSX text or pre-extracted text
     parts.push({
       text: `Document text content:\n${text.slice(0, 150000)}`,
     });
@@ -234,11 +181,12 @@ export async function extractWithGemini({ buffer, mimeType, text, docType }) {
     throw new GeminiExtractionError("Document has no readable content for Gemini.", "unsupported_input");
   }
 
+  // NOTE: No responseSchema — it causes gemini-3.5-flash-lite to take 30+ seconds.
+  // The prompt instructs JSON format, and responseMimeType ensures JSON output.
   const body = {
     contents: [{ role: "user", parts }],
     generationConfig: {
       responseMimeType: "application/json",
-      responseSchema: schemaFor(docType),
       temperature: 0,
     },
   };
@@ -267,7 +215,6 @@ export async function extractWithGemini({ buffer, mimeType, text, docType }) {
         throw new GeminiExtractionError("Gemini returned unreadable JSON.", "invalid_json");
       }
 
-      // Check safety blocks and finish reasons
       const candidate = json?.candidates?.[0];
       if (!candidate) {
         const blockReason = json?.promptFeedback?.blockReason;
@@ -278,10 +225,10 @@ export async function extractWithGemini({ buffer, mimeType, text, docType }) {
       }
 
       if (candidate.finishReason === "SAFETY") {
-        throw new GeminiExtractionError("Gemini blocked document extraction due to safety filters.", "safety_block");
+        throw new GeminiExtractionError("Gemini blocked extraction due to safety filters.", "safety_block");
       }
       if (candidate.finishReason === "MAX_TOKENS") {
-        throw new GeminiExtractionError("Gemini output exceeded maximum token limit.", "max_tokens");
+        throw new GeminiExtractionError("Gemini output exceeded token limit.", "max_tokens");
       }
 
       const output = responseText(json);
